@@ -1,10 +1,25 @@
 # The Long Road
 
-A browser-based procedural road-driving prototype built with Three.js. The current build includes streamed terrain, seasonal biomes, a city biome, self-driving, a Ford Bronco player vehicle, and AI traffic.
+A browser-based procedural road-driving prototype built with Three.js.
+
+## Current milestone: driving foundation
+
+The active local build now focuses on driving before city/airport expansion:
+
+- Ford Bronco stock vehicle at realistic overall scale and native forward orientation.
+- Signed-speed arcade-realistic driving model with forward, braking, reverse, drag, handbrake, speed-sensitive steering, and a bicycle-style yaw model.
+- Body pitch/roll response and smoother chase/interior cameras.
+- Self Drive follows the right-hand lane and automatically reduces speed for bends.
+- Traffic now uses the selected free low-poly car pack rather than the previous traffic pack.
+- 12 traffic models are normalized independently to believable lengths, placed from the road tangent/normal, and spawned in both directions.
+- Basic traffic spacing logic slows cars behind other vehicles.
+- Visible asset loading status replaces silent model failures.
+
+The next step is testing/tuning this milestone on the target machine before adding more scenery systems.
 
 ## Run locally
 
-Serve the folder over HTTP (do not open `index.html` as `file://`):
+Serve the folder over HTTP:
 
 ```bash
 python3 -m http.server 8000
@@ -12,42 +27,50 @@ python3 -m http.server 8000
 
 Then open `http://localhost:8000`.
 
-## Required local assets
+The packaged Mac build also includes `START.command` to start a local server and open the game.
 
-Place these files in `assets/`:
+## Vehicle asset layout
 
-- `2021_ford_bronco_wildtrak.glb`
-- `traffic_car_pack.glb`
-
-The code intentionally keeps large binary GLBs separate from `index.html`, which makes source control and debugging much easier.
+```text
+assets/
+  2021_ford_bronco_wildtrak.glb
+  traffic/
+    armor.glb
+    coupe.glb
+    fenyr.glb
+    ghini.glb
+    italia.glb
+    jeep.glb
+    kamaro.glb
+    lamb.glb
+    mobil.glb
+    police.glb
+    rally.glb
+    van.glb
+```
 
 ## Controls
 
 - W / Up: accelerate
-- S / Down: brake
+- S / Down: brake / reverse
 - A / D: steer
 - Space: handbrake
 - T: toggle Self Drive
 - B: next biome
 - C: change camera
-- R: reset
+- R: reset to road
 
-## Current vehicle fixes
+## Selected asset stack
 
-- Bronco uses its native +Z forward orientation; the previous extra 180-degree rotation was removed.
-- Traffic car #1 no longer captures the wheels from every vehicle in the pack.
-- Each traffic model is normalized independently to a realistic vehicle length.
-- Traffic positions use the same road tangent/normal math as the rendered road ribbon, keeping lane centers on asphalt through curves.
-- Traffic pitch follows road elevation rather than adjacent terrain.
+For upcoming work we have selected:
 
-## Asset attribution
+- Downtown City MegaKit — city/building pieces
+- Kenney City Kit: Roads — intersections and street infrastructure
+- Free low-poly car pack — traffic
+- Kenney Input Prompts — HUD/control prompts
 
-**2021 Ford Bronco Wildtrak** — David_Holiday / Sketchfab, CC BY 4.0.  
-Source: https://sketchfab.com/3d-models/2021-ford-bronco-wildtrak-0876db48ce354f3a81f6cbd307b0324e
-
-**Traffic Car Pack** — JUSTGAME / Sketchfab, CC BY 4.0.  
-Source: https://sketchfab.com/3d-models/traffic-car-pack-916a8b149ae24d8b8c9cf12d4a1c64d4
+Only the traffic pack is being integrated during the driving milestone.
 
 ## Project note
 
-The terrain/road architecture was reconstructed as a clean implementation inspired by observed behavior from an old Slow Roads build; the project does not copy its minified implementation.
+The terrain/road architecture is a clean implementation inspired by observed behavior from an old Slow Roads build; the project does not copy its minified implementation.
