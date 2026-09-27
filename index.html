@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+  <title>The Long Road</title>
+  <style>
+    html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#b9cfde;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#fff}
+    canvas{display:block;width:100%;height:100%}
+    #hud{position:fixed;left:22px;top:18px;z-index:10;pointer-events:none;text-shadow:0 2px 10px rgba(0,0,0,.55)}
+    #title{font-size:14px;letter-spacing:.34em;text-transform:uppercase;opacity:.88}
+    #speed{margin-top:10px;font-size:44px;font-weight:300;line-height:1}
+    #unit{font-size:12px;letter-spacing:.2em;opacity:.78;margin-left:4px}
+    #state{font-size:11px;letter-spacing:.14em;text-transform:uppercase;margin-top:8px;opacity:.72}
+    #help{position:fixed;right:22px;bottom:19px;z-index:10;text-align:right;font-size:11px;line-height:1.7;letter-spacing:.07em;opacity:.7;pointer-events:none;text-shadow:0 2px 9px rgba(0,0,0,.65)}
+    #badge{position:fixed;left:22px;bottom:20px;font-size:10px;letter-spacing:.11em;opacity:.56;pointer-events:none}
+    #loader{position:fixed;inset:0;display:grid;place-items:center;background:#b9cfde;z-index:30;color:#24333a;letter-spacing:.25em;text-transform:uppercase;font-size:12px;transition:opacity .45s ease}
+    #driveControls{position:fixed;right:22px;top:18px;z-index:20;display:flex;gap:8px;align-items:center}
+    #driveControls button{appearance:none;border:1px solid rgba(255,255,255,.45);background:rgba(20,30,35,.28);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);color:#fff;border-radius:999px;padding:10px 15px;font:600 11px/1 Inter,ui-sans-serif,system-ui,sans-serif;letter-spacing:.12em;text-transform:uppercase;cursor:pointer;box-shadow:0 5px 18px rgba(0,0,0,.12);transition:background .18s ease,transform .18s ease,border-color .18s ease}
+    #driveControls button:hover{transform:translateY(-1px);background:rgba(20,30,35,.40)}
+    #autoBtn.on{background:rgba(235,245,241,.90);border-color:rgba(255,255,255,.95);color:#183229}
+    #biomePill{pointer-events:none;border:1px solid rgba(255,255,255,.34);background:rgba(20,30,35,.18);backdrop-filter:blur(8px);border-radius:999px;padding:10px 13px;font:600 10px/1 Inter,ui-sans-serif,system-ui,sans-serif;letter-spacing:.13em;text-transform:uppercase;color:#fff;min-width:78px;text-align:center}
+  </style>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <div id="loader">building road</div>
+  <div id="hud">
+    <div id="title">The Long Road</div>
+    <div><span id="speed">0</span><span id="unit">MPH</span></div>
+    <div id="state">manual · asphalt</div>
+  </div>
+  <div id="driveControls"><div id="biomePill">Summer</div><button id="biomeBtn" type="button">Next Biome</button><button id="autoBtn" type="button" aria-pressed="false">Self Drive: Off</button></div>
+  <div id="help">W / ↑ accelerate &nbsp; S / ↓ brake<br>A / D steer &nbsp; SPACE handbrake<br>T self drive &nbsp; B next biome<br>C camera &nbsp; R reset</div>
+  <div id="badge">clean-room prototype based on observed architecture, not copied source</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+const BRONCO_URL='./assets/2021_ford_bronco_wildtrak.glb';
+const TRAFFIC_URL='./assets/traffic_car_pack.glb';
+
+const clamp = THREE.MathUtils.clamp;
+const lerp = THREE.MathUtils.lerp;
+const smoothstep = (a,b,x) => {
+  const t = clamp((x-a)/(b-a),0,1);
+  return t*t*(3-2*t);
+};
+
+const BIOME_LENGTH=1500;
+const BIOMES=[
+  {id:'summer',label:'Summer',sky:0xbfd3df,fog:0xbfd3df,ground:0x4b753f,tree:0x456447},
+  {id:'spring',label:'Spring',sky:0xcbe1ea,fog:0xcbe1ea,ground:0x6f9a4f,tree:0x5f8a55},
+  {id:'fall',label:'Fall',sky:0xc8d2d1,fog:0xc8d2d1,ground:0x776e3e,tree:0xb56532},
+  {id:'snow',label:'Snow',sky:0xdbe4e8,fog:0xe4ecef,ground:0xe6e9e4,tree:0x82958a},
+  {id:'city',label:'City',sky:0xb8c7cf,fog:0xb8c7cf,ground:0x686d6d,tree:0x667463}
+];
+function mod(n,m){return ((n%m)+m)%m;}
+function biomeInfoAt(z){
+  const segment=Math.floor(z/BIOME_LENGTH);
+  const index=mod(segment,BIOMES.length);
+  return {...BIOMES[index],index,segment,start:segment*BIOME_LENGTH,end:(segment+1)*BIOME_LENGTH,mid:(segment+0.5)*BIOME_LENGTH};
+}
+function cityFactorAt(z){
+  const b=biomeInfoAt(z);
+  if(b.id!=='city') return 0;
+  const edge=160;
+  return smoothstep(b.start,b.start+edge,z)*smoothstep(b.end,b.end-edge,z);
+}
+function hash2(x,z,seed){
+  let n=(x*374761393+z*668265263+seed*1447)|0;
+  n=(n^(n>>>13))*1274126177;
+  n=n^(n>>>16);
+  return (n>>>0)/4294967295;
+}
+function fade(t){return t*t*(3-2*t);}
+class ValueNoise{
+  constructor(scale,seed){this.scale=scale;this.seed=seed;}
+  sample(x,z){
+    const fx=x/this.scale,fz=z/this.scale;
+    const ix=Math.floor(fx),iz=Math.floor(fz);
+    const tx=fade(fx-ix),tz=fade(fz-iz);
+    const a=hash2(ix,iz,this.seed)*2-1;
+    const b=hash2(ix+1,iz,this.seed)*2-1;
+    const c=hash2(ix,iz+1,this.seed)*2-1;
+    const d=hash2(ix+1,iz+1,this.seed)*2-1;
+    return lerp(lerp(a,b,tx),lerp(c,d,tx),tz);
+  }
+}
+class TerrainField{
+  constructor(seed=1979){
+    this.seed=seed;
+    this.layers=[
+      {n:new ValueNoise(1050,seed+11),amp:64},
+      {n:new ValueNoise(430,seed+37),amp:25},
+      {n:new ValueNoise(170,seed+71),amp:10},
+      {n:new ValueNoise(70,seed+97),amp:3.2}
+    ];
+  }
+  raw(x,z){let h=0;for(const l of this.layers)h+=l.n.sample(x,z)*l.amp;return h+8;}
+  naturalRoadX(z){return Math.sin(z*.00155)*105+Math.sin(z*.0042+.75)*38+Math.sin(z*.009+2.1)*8;}
+  roadX(z){
+    const natural=this.naturalRoadX(z),cf=cityFactorAt(z);
+    if(cf<=0)return natural;
+    const b=biomeInfoAt(z),anchor=this.naturalRoadX(b.mid);
+    return lerp(natural,anchor,cf);
+  }
+  roadDX(z){const e=2;return (this.roadX(z+e)-this.roadX(z-e))/(e*2);}
+  roadBase(z){return this.raw(this.roadX(z),z);}
+  roadY(z){
+    const e=14;
+    return (this.roadBase(z-e)+2*this.roadBase(z)+this.roadBase(z+e))/4;
+  }
+  height(x,z){
+    const roadX=this.roadX(z),d=Math.abs(x-roadX),cf=cityFactorAt(z);
+    const natural=this.raw(x,z),road=this.roadY(z);
+    const blend=1-smoothstep(4.6,15.0,d);
+    let h=lerp(natural,road,blend);
+    if(cf>0){const flat=road+Math.min(Math.abs(x-roadX)*.015,3.5);h=lerp(h,flat,cf*.88);}
+    return h;
+  }
+  tangent(z){const dx=this.roadDX(z);return new THREE.Vector3(dx,0,1).normalize();}
+}
+const field=new TerrainField();
+
+const scene=new THREE.Scene();
+scene.background=new THREE.Color(0xbfd3df);
+scene.fog=new THREE.FogExp2(0xbfd3df,.00138);
+const camera=new THREE.PerspectiveCamera(58,innerWidth/innerHeight,.1,3000);
+const renderer=new THREE.WebGLRenderer({antialias:true,powerPreference:'high-performance'});
+renderer.setSize(innerWidth,innerHeight);renderer.setPixelRatio(Math.min(devicePixelRatio,1.5));
+renderer.shadowMap.enabled=true;renderer.shadowMap.type=THREE.PCFSoftShadowMap;
+renderer.outputColorSpace=THREE.SRGBColorSpace;renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=1.05;
+document.body.appendChild(renderer.domElement);
+const hemi=new THREE.HemisphereLight(0xe7f2f8,0x425446,2.0);scene.add(hemi);
+const sun=new THREE.DirectionalLight(0xfff5de,3.0);sun.castShadow=true;sun.shadow.mapSize.set(2048,2048);sun.shadow.camera.left=-160;sun.shadow.camera.right=160;sun.shadow.camera.top=160;sun.shadow.camera.bottom=-160;scene.add(sun);
+const horizon=new THREE.Mesh(new THREE.CylinderGeometry(1200,1200,1,48,1,true),new THREE.MeshBasicMaterial({color:0xaebfc7,side:THREE.BackSide,transparent:true,opacity:.18}));horizon.position.y=-30;scene.add(horizon);
+const dummy=new THREE.Object3D();
+
+function makeCanvasTexture(kind){
+  const c=document.createElement('canvas');c.width=c.height=256;const ctx=c.getContext('2d');
+  let base='#6f7f54';
+  if(kind==='road')base='#383b3d';if(kind==='edge')base='#625f55';if(kind==='snow')base='#e8ece9';if(kind==='city')base='#717372';if(kind==='fall')base='#766b42';if(kind==='spring')base='#77a258';
+  ctx.fillStyle=base;ctx.fillRect(0,0,256,256);
+  for(let i=0;i<7000;i++){
+    const v=Math.floor(30+Math.random()*80);ctx.fillStyle=`rgba(${v},${v},${v},${kind==='road'?.06:.035})`;const s=.5+Math.random()*2;ctx.fillRect(Math.random()*256,Math.random()*256,s,s);
+  }
+  if(kind==='fall')for(let i=0;i<260;i++){ctx.fillStyle=`hsla(${20+Math.random()*35},${45+Math.random()*35}%,${30+Math.random()*25}%,.3)`;ctx.fillRect(Math.random()*256,Math.random()*256,2+Math.random()*5,1+Math.random()*3);}
+  if(kind==='snow')for(let i=0;i<200;i++){ctx.fillStyle='rgba(140,155,160,.08)';ctx.beginPath();ctx.arc(Math.random()*256,Math.random()*256,2+Math.random()*10,0,Math.PI*2);ctx.fill();}
+  const t=new THREE.CanvasTexture(c);t.wrapS=t.wrapT=THREE.RepeatWrapping;t.colorSpace=THREE.SRGBColorSpace;t.anisotropy=Math.min(8,renderer.capabilities.getMaxAnisotropy());return t;
+}
+const terrainTex={summer:makeCanvasTexture('summer'),spring:makeCanvasTexture('spring'),fall:makeCanvasTexture('fall'),snow:makeCanvasTexture('snow'),city:makeCanvasTexture('city')};
+const roadTex=makeCanvasTexture('road');roadTex.repeat.set(1.5,18);
+const edgeTex=makeCanvasTexture('edge');edgeTex.repeat.set(3,16);
+const roadMat=new THREE.MeshStandardMaterial({map:roadTex,color:0xffffff,roughness:.97,metalness:.02});
+const roadEdgeMat=new THREE.MeshStandardMaterial({map:edgeTex,color:0xffffff,roughness:1});
+const lineMat=new THREE.MeshStandardMaterial({color:0xd6d0af,roughness:.78});
+
+const CHUNK=120,RES=20,X_RADIUS=3,Z_BACK=2,Z_FRONT=6;
+const terrainChunks=new Map();
+function biomeColorAt(x,z){const b=biomeInfoAt(z);return new THREE.Color(b.ground);}
+function buildTerrainChunk(cx,cz){
+  const geo=new THREE.PlaneGeometry(CHUNK,CHUNK,RES,RES);geo.rotateX(-Math.PI/2);const pos=geo.attributes.position;const colors=[];
+  const centerX=(cx+.5)*CHUNK,centerZ=(cz+.5)*CHUNK;geo.translate(centerX,0,centerZ);
+  for(let i=0;i<pos.count;i++){
+    const x=pos.getX(i),z=pos.getZ(i),y=field.height(x,z);pos.setY(i,y);
+    const c=biomeColorAt(x,z);const n=(hash2(Math.floor(x*2),Math.floor(z*2),63)-.5)*.08;c.offsetHSL(0,0,n);colors.push(c.r,c.g,c.b);
+  }
+  geo.setAttribute('color',new THREE.Float32BufferAttribute(colors,3));geo.computeVertexNormals();
+  const b=biomeInfoAt(centerZ);const tex=terrainTex[b.id];tex.repeat.set(CHUNK/16,CHUNK/16);const mat=new THREE.MeshStandardMaterial({map:tex,vertexColors:true,roughness:1});const mesh=new THREE.Mesh(geo,mat);mesh.receiveShadow=true;scene.add(mesh);
+  return {mesh,geo,mat};
+}
+function disposeTerrainChunk(c){scene.remove(c.mesh);c.geo.dispose();c.mat.dispose();}
+function streamTerrain(x,z){
+  const cx=Math.floor(x/CHUNK),cz=Math.floor(z/CHUNK),needed=new Set();
+  for(let dz=-Z_BACK;dz<=Z_FRONT;dz++)for(let dx=-X_RADIUS;dx<=X_RADIUS;dx++){
+    const k=`${cx+dx},${cz+dz}`;needed.add(k);if(!terrainChunks.has(k))terrainChunks.set(k,buildTerrainChunk(cx+dx,cz+dz));
+  }
+  for(const [k,c]of terrainChunks)if(!needed.has(k)){disposeTerrainChunk(c);terrainChunks.delete(k);}
+}
+
+const ROAD_CHUNK=260,roadChunks=new Map();
+function makeRibbon(z0,z1,width,yOffset,material){
+  const step=4,n=Math.ceil((z1-z0)/step)+1,positions=new Float32Array(n*2*3),uvs=new Float32Array(n*2*2),indices=[];let p=0,u=0;
+  for(let i=0;i<n;i++){
+    const z=lerp(z0,z1,i/(n-1)),x=field.roadX(z),dx=field.roadDX(z),inv=1/Math.hypot(1,dx),nx=inv,nz=-dx*inv,y=field.roadY(z)+yOffset;
+    positions[p++]=x-nx*width;positions[p++]=y;positions[p++]=z-nz*width;positions[p++]=x+nx*width;positions[p++]=y;positions[p++]=z+nz*width;
+    const v=(z-z0)/7;uvs[u++]=0;uvs[u++]=v;uvs[u++]=1;uvs[u++]=v;if(i<n-1){const a=i*2,b=a+1,c=a+2,d=a+3;indices.push(a,c,b,b,c,d);}
+  }
+  const geo=new THREE.BufferGeometry();geo.setAttribute('position',new THREE.BufferAttribute(positions,3));geo.setAttribute('uv',new THREE.BufferAttribute(uvs,2));geo.setIndex(indices);geo.computeVertexNormals();const mesh=new THREE.Mesh(geo,material);mesh.receiveShadow=true;return {mesh,geo};
+}
+function makeCrossStreet(z,width=4.55){
+  const cf=cityFactorAt(z),cx=field.roadX(z),span=310*cf,y=field.roadY(z),group=new THREE.Group();
+  const shoulder=new THREE.Mesh(new THREE.BoxGeometry(span*2,.045,12.8),roadEdgeMat);shoulder.position.set(cx,y+.012,z);shoulder.receiveShadow=true;group.add(shoulder);
+  const road=new THREE.Mesh(new THREE.BoxGeometry(span*2,.07,width*2),roadMat);road.position.set(cx,y+.04,z);road.receiveShadow=true;group.add(road);
+  scene.add(group);return {group,geos:[shoulder.geometry,road.geometry]};
+}
+function buildRoadChunk(ci){
+  const z0=ci*ROAD_CHUNK,z1=z0+ROAD_CHUNK,shoulder=makeRibbon(z0,z1,6.4,.015,roadEdgeMat),road=makeRibbon(z0,z1,4.55,.035,roadMat);scene.add(shoulder.mesh,road.mesh);
+  const marks=[];for(let z=z0+8;z<z1-4;z+=18){const x=field.roadX(z),y=field.roadY(z)+.075,tan=field.tangent(z);marks.push({x,y,z,ang:Math.atan2(tan.x,tan.z)});}
+  const markGeo=new THREE.BoxGeometry(.13,.025,6.5),inst=new THREE.InstancedMesh(markGeo,lineMat,marks.length);marks.forEach((m,i)=>{dummy.position.set(m.x,m.y,m.z);dummy.rotation.set(0,m.ang,0);dummy.scale.set(1,1,1);dummy.updateMatrix();inst.setMatrixAt(i,dummy.matrix);});inst.instanceMatrix.needsUpdate=true;scene.add(inst);
+  const crossStreets=[],b0=biomeInfoAt(z0),b1=biomeInfoAt(z1);for(let seg=b0.segment-1;seg<=b1.segment+1;seg++){const bio=BIOMES[mod(seg,BIOMES.length)];if(bio.id!=='city')continue;const start=seg*BIOME_LENGTH;for(let z=start+225;z<(seg+1)*BIOME_LENGTH-160;z+=110)if(z>=z0-4&&z<=z1+4&&cityFactorAt(z)>.55)crossStreets.push(makeCrossStreet(z));}
+  return {shoulder,road,inst,markGeo,crossStreets};
+}
+function disposeRoadChunk(c){scene.remove(c.shoulder.mesh,c.road.mesh,c.inst);c.shoulder.geo.dispose();c.road.geo.dispose();c.markGeo.dispose();c.inst.dispose();for(const cs of c.crossStreets||[]){scene.remove(cs.group);for(const g of cs.geos)g.dispose();}}
+function streamRoad(z){const ci=Math.floor(z/ROAD_CHUNK),needed=new Set();for(let k=-2;k<=6;k++){const id=ci+k;needed.add(id);if(!roadChunks.has(id))roadChunks.set(id,buildRoadChunk(id));}for(const [id,c]of roadChunks)if(!needed.has(id)){disposeRoadChunk(c);roadChunks.delete(id);}}
+
+const car={group:new THREE.Group(),wheels:[],frontSteer:[],model:null,usingStockModel:false};scene.add(car.group);
+const vehicleLoadState={bronco:'loading',traffic:'loading'};
+const broncoLoader=new GLTFLoader();
+broncoLoader.load(BRONCO_URL,gltf=>{
+  const model=gltf.scene;model.traverse(obj=>{if(!obj.isMesh)return;obj.castShadow=true;obj.receiveShadow=true;const mats=Array.isArray(obj.material)?obj.material:[obj.material];for(const m of mats){if(!m)continue;if(m.map){m.map.anisotropy=Math.min(8,renderer.capabilities.getMaxAnisotropy());m.map.needsUpdate=true;}m.needsUpdate=true;}});
+  model.updateMatrixWorld(true);let box=new THREE.Box3().setFromObject(model),size=box.getSize(new THREE.Vector3());const uniformScale=4.45/Math.max(size.z,size.x,.001);model.scale.setScalar(uniformScale);model.rotation.y=0;model.updateMatrixWorld(true);box=new THREE.Box3().setFromObject(model);const center=box.getCenter(new THREE.Vector3());model.position.x-=center.x;model.position.z-=center.z;model.position.y-=box.min.y+.48;
+  car.group.clear();car.group.add(model);car.model=model;car.usingStockModel=true;vehicleLoadState.bronco='ready';
+},undefined,err=>{vehicleLoadState.bronco='error';console.error('Bronco failed to load.',err);});
+
+const trafficTemplates=[],trafficCars=[];
+function trafficMeshBelongs(name,index){
+  if(name.startsWith(`Car_${index}_`))return true;
+  const suffix=index===1?'':`_${index-1}`;
+  return name.startsWith(`arka_teker${suffix}_wheel_`)||name.startsWith(`on_teker${suffix}_wheel_`);
+}
+function makeTrafficTemplate(source,index){
+  source.updateMatrixWorld(true);const inner=new THREE.Group();source.traverse(obj=>{if(!obj.isMesh||!trafficMeshBelongs(obj.name,index))return;const m=new THREE.Mesh(obj.geometry,obj.material);obj.matrixWorld.decompose(m.position,m.quaternion,m.scale);m.castShadow=true;m.receiveShadow=true;inner.add(m);});if(!inner.children.length)return null;
+  inner.updateMatrixWorld(true);let box=new THREE.Box3().setFromObject(inner),size=box.getSize(new THREE.Vector3());const targetLength=[4.42,4.10,4.30,4.02,4.35][index-1],s=targetLength/Math.max(size.x,size.z,.001);inner.scale.setScalar(s);inner.updateMatrixWorld(true);box=new THREE.Box3().setFromObject(inner);const center=box.getCenter(new THREE.Vector3());inner.position.x-=center.x;inner.position.z-=center.z;inner.position.y-=box.min.y;inner.rotation.y=Math.PI/2;const root=new THREE.Group();root.add(inner);return root;
+}
+function seedTraffic(){if(!trafficTemplates.length||trafficCars.length)return;const count=14;for(let i=0;i<count;i++){const dir=i%4===0?-1:1,visual=trafficTemplates[i%trafficTemplates.length].clone(true);scene.add(visual);trafficCars.push({visual,dir,pathZ:carState.z+100+i*62,speed:(dir>0?14.5:17.5)+(i%5)*.75,lane:dir>0?2.15:-2.15});}}
+function reseedTrafficAroundPlayer(){for(let i=0;i<trafficCars.length;i++)trafficCars[i].pathZ=carState.z+90+(i+1)*58;}
+function roadPoseAt(pathZ,laneOffset=0){const dx=field.roadDX(pathZ),inv=1/Math.hypot(1,dx),nx=inv,nz=-dx*inv;return{x:field.roadX(pathZ)+nx*laneOffset,y:field.roadY(pathZ)+.085,z:pathZ+nz*laneOffset,heading:Math.atan2(dx,1)};}
+function updateTraffic(dt){
+  for(let i=0;i<trafficCars.length;i++){
+    const v=trafficCars[i];v.pathZ+=v.dir*v.speed*dt;const dz=v.pathZ-carState.z;if(dz<-260||dz>950)v.pathZ=carState.z+300+((i*97)%560);const pose=roadPoseAt(v.pathZ,v.lane);v.visual.position.set(pose.x,pose.y,pose.z);v.visual.rotation.order='YXZ';v.visual.rotation.y=pose.heading+(v.dir<0?Math.PI:0);const back=field.roadY(v.pathZ-1.6),front=field.roadY(v.pathZ+1.6);v.visual.rotation.x=-Math.atan2(front-back,3.2)*(v.dir>0?1:-1);v.visual.rotation.z=0;
+  }
+}
+const trafficLoader=new GLTFLoader();trafficLoader.load(TRAFFIC_URL,gltf=>{for(let i=1;i<=5;i++){const t=makeTrafficTemplate(gltf.scene,i);if(t)trafficTemplates.push(t);}vehicleLoadState.traffic=trafficTemplates.length?'ready':'error';seedTraffic();},undefined,err=>{vehicleLoadState.traffic='error';console.error('Traffic pack failed to load.',err);});
+
+const carState={x:field.roadX(0),z:0,y:field.roadY(0)+.56,speed:0,heading:Math.atan2(field.roadDX(0),1),steer:0,auto:false};
+const autoBtn=document.querySelector('#autoBtn'),biomeBtn=document.querySelector('#biomeBtn'),biomePill=document.querySelector('#biomePill');
+function setAuto(enabled){carState.auto=!!enabled;autoBtn.classList.toggle('on',carState.auto);autoBtn.setAttribute('aria-pressed',String(carState.auto));autoBtn.textContent=carState.auto?'Self Drive: On':'Self Drive: Off';}
+autoBtn.addEventListener('click',()=>setAuto(!carState.auto));
+function jumpNextBiome(){const b=biomeInfoAt(carState.z),targetStart=b.end;carState.z=targetStart+240;carState.x=field.roadX(carState.z);carState.y=field.roadY(carState.z)+.56;carState.heading=Math.atan2(field.roadDX(carState.z),1);carState.speed=0;carState.steer=0;streamTerrain(carState.x,carState.z);streamRoad(carState.z);reseedTrafficAroundPlayer();}
+biomeBtn.addEventListener('click',jumpNextBiome);
+const keys=new Set();let cameraMode=0;
+addEventListener('keydown',e=>{keys.add(e.code);if(e.code==='KeyT'&&!e.repeat)setAuto(!carState.auto);if(e.code==='KeyB'&&!e.repeat)jumpNextBiome();if(e.code==='KeyC'&&!e.repeat)cameraMode=(cameraMode+1)%2;if(e.code==='KeyR'&&!e.repeat)resetCar();});addEventListener('keyup',e=>keys.delete(e.code));
+function resetCar(){const z=carState.z;carState.x=field.roadX(z);carState.speed=0;carState.heading=Math.atan2(field.roadDX(z),1);carState.steer=0;reseedTrafficAroundPlayer();}
+function updateCar(dt){
+  const forward=keys.has('KeyW')||keys.has('ArrowUp'),brake=keys.has('KeyS')||keys.has('ArrowDown'),hand=keys.has('Space');let steerInput=(keys.has('KeyA')||keys.has('ArrowLeft')?1:0)-(keys.has('KeyD')||keys.has('ArrowRight')?1:0);const roadCenter=field.roadX(carState.z),offroad=Math.abs(carState.x-roadCenter)>6.5;
+  if(carState.auto){const look=clamp(26+carState.speed*1.35,26,82),targetZ=carState.z+look,targetX=field.roadX(targetZ),tangentHeading=Math.atan2(field.roadDX(targetZ),1),interceptHeading=Math.atan2(targetX-carState.x,look),targetHeading=lerp(interceptHeading,tangentHeading,.34);let diff=targetHeading-carState.heading;diff=Math.atan2(Math.sin(diff),Math.cos(diff));const lateralError=targetX-carState.x;steerInput=clamp(diff*2.9+lateralError*.010,-1,1);const h1=Math.atan2(field.roadDX(carState.z+25),1),h2=Math.atan2(field.roadDX(carState.z+80),1),bend=Math.abs(Math.atan2(Math.sin(h2-h1),Math.cos(h2-h1))),targetSpeed=lerp(26,17,clamp(bend/.42,0,1));if(carState.speed<targetSpeed)carState.speed+=7.5*dt;else carState.speed-=7*dt;}else{if(forward)carState.speed+=9.5*dt;else carState.speed-=1.4*dt;if(brake)carState.speed-=15*dt;}
+  if(hand)carState.speed-=25*dt;if(offroad)carState.speed-=3.8*dt;carState.speed=clamp(carState.speed,0,41);carState.steer=lerp(carState.steer,steerInput,1-Math.pow(.001,dt));const steeringRate=.38*carState.steer*(.25+Math.min(carState.speed/12,1));carState.heading+=steeringRate*dt;carState.x+=Math.sin(carState.heading)*carState.speed*dt;carState.z+=Math.cos(carState.heading)*carState.speed*dt;carState.y=field.height(carState.x,carState.z)+.50;const front=field.height(carState.x+Math.sin(carState.heading)*1.6,carState.z+Math.cos(carState.heading)*1.6),back=field.height(carState.x-Math.sin(carState.heading)*1.6,carState.z-Math.cos(carState.heading)*1.6),rx=Math.cos(carState.heading),rz=-Math.sin(carState.heading),left=field.height(carState.x-rx*.8,carState.z-rz*.8),right=field.height(carState.x+rx*.8,carState.z+rz*.8),pitch=Math.atan2(front-back,3.2),roll=Math.atan2(right-left,1.6);car.group.position.set(carState.x,carState.y,carState.z);car.group.rotation.order='YXZ';car.group.rotation.y=carState.heading;car.group.rotation.x=-pitch;car.group.rotation.z=roll;
+}
+const cameraTarget=new THREE.Vector3(),cameraWanted=new THREE.Vector3();
+function updateCamera(dt){const fwd=new THREE.Vector3(Math.sin(carState.heading),0,Math.cos(carState.heading)),side=new THREE.Vector3(fwd.z,0,-fwd.x);if(cameraMode===0){cameraWanted.set(carState.x,carState.y,carState.z).addScaledVector(fwd,-9.2);cameraWanted.y+=4.1;cameraTarget.set(carState.x,carState.y+.85,carState.z).addScaledVector(fwd,11);}else{cameraWanted.set(carState.x,carState.y+1.42,carState.z).addScaledVector(fwd,.38);cameraTarget.set(carState.x,carState.y+1.2,carState.z).addScaledVector(fwd,45);}camera.position.lerp(cameraWanted,1-Math.pow(.00008,dt));camera.lookAt(cameraTarget);}
+const currentSky=new THREE.Color(scene.background),targetSky=new THREE.Color();
+function updateBiomeVisuals(dt){const b=biomeInfoAt(carState.z);targetSky.setHex(b.sky);currentSky.lerp(targetSky,1-Math.pow(.03,dt));scene.background.copy(currentSky);scene.fog.color.copy(currentSky);if(b.id==='snow'){hemi.intensity=2.35;sun.intensity=2.45;renderer.toneMappingExposure=1.12;}else if(b.id==='fall'){hemi.intensity=1.85;sun.intensity=2.65;renderer.toneMappingExposure=1.03;}else if(b.id==='city'){hemi.intensity=1.9;sun.intensity=2.75;renderer.toneMappingExposure=1;}else{hemi.intensity=2;sun.intensity=3;renderer.toneMappingExposure=1.05;}biomePill.textContent=b.label;}
+function updateSun(){sun.position.set(carState.x-180,carState.y+310,carState.z-120);sun.target.position.set(carState.x,carState.y,carState.z+80);if(!sun.target.parent)scene.add(sun.target);horizon.position.x=carState.x;horizon.position.z=carState.z;}
+const speedEl=document.querySelector('#speed'),stateEl=document.querySelector('#state');let last=performance.now(),streamClock=0;streamTerrain(carState.x,carState.z);streamRoad(carState.z);updateCar(0);updateCamera(1);updateSun();document.querySelector('#loader').style.opacity='0';setTimeout(()=>document.querySelector('#loader').remove(),500);
+function animate(now){requestAnimationFrame(animate);const dt=Math.min((now-last)/1000,.05);last=now;updateCar(dt);updateTraffic(dt);updateCamera(dt);updateBiomeVisuals(dt);updateSun();streamClock+=dt;if(streamClock>.32){streamClock=0;streamTerrain(carState.x,carState.z);streamRoad(carState.z);}speedEl.textContent=Math.round(carState.speed*2.23694);const off=Math.abs(carState.x-field.roadX(carState.z))>6.5,bio=biomeInfoAt(carState.z);stateEl.textContent=`${carState.auto?'autopilot':'manual'} · ${bio.label.toLowerCase()} · ${off?'off road':'asphalt'} · bronco ${vehicleLoadState.bronco} · ${trafficCars.length} traffic`;renderer.render(scene,camera);}
+requestAnimationFrame(animate);addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);});
+</script>
+</body>
+</html>
